@@ -1,25 +1,24 @@
+use anyhow::Context;
 use nix::fcntl::{OFlag, open};
 use nix::sys::stat::Mode;
 use nix::unistd::{Whence, close, lseek, read};
 
 const DEFAULT_COUNT: i32 = 10;
 
-fn main() -> Result<(), String> {
+fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        return Err("Missing arguments".into());
+        anyhow::bail!("Usage: tail -n <file>");
     }
     let mut count: Option<i32> = None;
 
     if args[1].starts_with("-") {
-        let temp = args[1][1..]
-            .parse::<i32>()
-            .map_err(|_| "Count should be a number")?;
+        let temp = args[1][1..].parse::<i32>().context("n must be a number")?;
 
         count = Some(temp);
 
         if args.len() != 3 {
-            return Err("Filename required".into());
+            anyhow::bail!("<file> required");
         }
     }
 
@@ -28,8 +27,7 @@ fn main() -> Result<(), String> {
     let mut count = count.unwrap_or(DEFAULT_COUNT);
 
     if let Ok(fd) = open(filename, OFlag::O_RDONLY, Mode::S_IRUSR) {
-        let file_size = lseek(&fd, 0, Whence::SeekEnd)
-            .map_err(|_| "Error while seeking to the end of the file")?;
+        let file_size = lseek(&fd, 0, Whence::SeekEnd)?;
         let mut pos = file_size;
         let mut res: Vec<String> = vec![];
         let mut partial_line = String::new();
@@ -39,8 +37,8 @@ fn main() -> Result<(), String> {
             pos -= to_read;
 
             let mut buf = vec![0u8; to_read as usize];
-            lseek(&fd, pos, Whence::SeekSet).map_err(|_| "Could not seek to position")?;
-            read(&fd, &mut buf).map_err(|_| "Could not read to the buffer")?;
+            lseek(&fd, pos, Whence::SeekSet)?;
+            read(&fd, &mut buf)?;
 
             for &byte in buf.iter().rev() {
                 if byte == b'\n' {
@@ -68,7 +66,7 @@ fn main() -> Result<(), String> {
         res.reverse();
         println!("{}", res.join(""));
 
-        close(fd).map_err(|_| "Could not close the file")?;
+        close(fd)?;
     }
 
     Ok(())
