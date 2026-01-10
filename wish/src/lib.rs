@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
 use nix::{
-    sys::wait::waitpid,
-    unistd::{AccessFlags, ForkResult, access, chdir, execv, fork},
+    fcntl::{OFlag, open},
+    sys::{stat::Mode, wait::waitpid},
+    unistd::{AccessFlags, ForkResult, access, chdir, dup2_stderr, dup2_stdout, execv, fork},
 };
 use std::{
     ffi::CString,
@@ -34,7 +35,7 @@ pub fn run() -> Result<()> {
         }
 
         // eval
-        let args = parse_args(command_line.trim());
+        let mut args = parse_args(command_line.trim());
 
         if args.is_empty() {
             continue;
@@ -45,13 +46,14 @@ pub fn run() -> Result<()> {
                 handle_exit();
                 Ok(())
             }
-            "cd" => handle_cd(args),
+            "cd" => handle_cd(&args),
             "path" => handle_path(&mut path, &args),
-            _ => process_command(&path, &args),
+            _ => {
+                let redirect_path = get_redirect_path(&mut args);
+                process_command(&path, &args, redirect_path)
+            }
         }
         .unwrap_or_else(|_| eprintln!("{GLOBAL_ERR_MSG}"))
-
-        // print
     }
 }
 
@@ -59,7 +61,7 @@ fn handle_exit() {
     exit(0);
 }
 
-fn process_command(path: &[String], args: &[&str]) -> Result<()> {
+fn process_command(path: &[String], args: &[&str], redirect_path: Option<String>) -> Result<()> {
     for path in path {
         let full_path = format!("{path}/{}", args[0]);
 
@@ -75,6 +77,17 @@ fn process_command(path: &[String], args: &[&str]) -> Result<()> {
                         .map(|arg| CString::new(*arg).expect("can't make cstring"))
                         .collect();
 
+                    if let Some(redirect_path) = &redirect_path {
+                        let fd = open(
+                            redirect_path.as_str(),
+                            OFlag::O_CREAT | OFlag::O_WRONLY,
+                            Mode::S_IRUSR | Mode::S_IWUSR,
+                        )?;
+
+                        dup2_stdout(&fd)?;
+                        dup2_stderr(&fd)?;
+                    }
+
                     execv(&CString::new(full_path)?, &c_args)?;
                 }
                 Err(_) => bail!(""),
@@ -85,7 +98,7 @@ fn process_command(path: &[String], args: &[&str]) -> Result<()> {
     bail!("")
 }
 
-fn handle_cd(args: Vec<&str>) -> Result<()> {
+fn handle_cd(args: &[&str]) -> Result<()> {
     if args.len() < 2 {
         bail!("")
     }
@@ -106,4 +119,16 @@ fn handle_path(path: &mut Vec<String>, args: &[&str]) -> Result<()> {
 
 fn parse_args(command: &str) -> Vec<&str> {
     command.split_whitespace().collect()
+}
+
+fn get_redirect_path(args: &mut Vec<&str>) -> Option<String> {
+    // TODO: Check if multiple >
+
+    if let Some(idx) = args.iter().position(|arg| *arg == ">") {
+        let path = args.get(idx + 1).map(|s| s.to_string());
+        args.drain(idx..);
+        return path;
+    }
+
+    None
 }
