@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 use nix::{
     fcntl::{OFlag, open},
     sys::{stat::Mode, wait::waitpid},
-    unistd::{AccessFlags, ForkResult, access, chdir, dup2_stderr, dup2_stdout, execv, fork},
+    unistd::{AccessFlags, ForkResult, Pid, access, chdir, dup2_stderr, dup2_stdout, execv, fork},
 };
 use std::{
     ffi::CString,
@@ -41,16 +41,27 @@ pub fn run() -> Result<()> {
             continue;
         }
 
-        match args[0] {
-            "exit" => {
-                handle_exit();
-                Ok(())
-            }
-            "cd" => handle_cd(&args),
-            "path" => handle_path(&mut path, &args),
-            _ => {
-                let redirect_path = get_redirect_path(&mut args);
-                process_command(&path, &args, redirect_path)
+        let commands: Vec<&[&str]> = args.split(|arg| *arg == "&").collect();
+
+        if commands.len() > 1 {
+            run_parallel_commands(&mut path, commands)
+        } else {
+            match args[0] {
+                "exit" => {
+                    handle_exit();
+                    Ok(())
+                }
+                "cd" => handle_cd(&args),
+                "path" => handle_path(&mut path, &args),
+                _ => match get_redirect_path(&mut args) {
+                    Ok(redirect_path) => {
+                        process_command(&path, &args, redirect_path.as_deref(), |child| {
+                            waitpid(child, None)?;
+                            Ok(())
+                        })
+                    }
+                    Err(_) => Ok(()),
+                },
             }
         }
         .unwrap_or_else(|_| eprintln!("{GLOBAL_ERR_MSG}"))
@@ -61,34 +72,24 @@ fn handle_exit() {
     exit(0);
 }
 
-fn process_command(path: &[String], args: &[&str], redirect_path: Option<String>) -> Result<()> {
-    for path in path {
-        let full_path = format!("{path}/{}", args[0]);
+fn process_command<F: FnMut(Pid) -> Result<()>>(
+    path: &[String],
+    args: &[&str],
+    redirect_path: Option<&str>,
+    mut parent_handle: F,
+) -> Result<()> {
+    for p in path {
+        let full_path = format!("{p}/{}", args[0]);
 
         if access(full_path.as_str(), AccessFlags::F_OK).is_ok() {
             match unsafe { fork() } {
                 Ok(ForkResult::Parent { child }) => {
-                    waitpid(child, None)?;
+                    parent_handle(child)?;
                     return Ok(());
                 }
                 Ok(ForkResult::Child) => {
-                    let c_args: Vec<CString> = args
-                        .iter()
-                        .map(|arg| CString::new(*arg).expect("can't make cstring"))
-                        .collect();
-
-                    if let Some(redirect_path) = &redirect_path {
-                        let fd = open(
-                            redirect_path.as_str(),
-                            OFlag::O_CREAT | OFlag::O_WRONLY,
-                            Mode::S_IRUSR | Mode::S_IWUSR,
-                        )?;
-
-                        dup2_stdout(&fd)?;
-                        dup2_stderr(&fd)?;
-                    }
-
-                    execv(&CString::new(full_path)?, &c_args)?;
+                    let _ = exec_child(args, redirect_path, &full_path);
+                    exit(1);
                 }
                 Err(_) => bail!(""),
             }
@@ -121,14 +122,67 @@ fn parse_args(command: &str) -> Vec<&str> {
     command.split_whitespace().collect()
 }
 
-fn get_redirect_path(args: &mut Vec<&str>) -> Option<String> {
+fn get_redirect_path(args: &mut Vec<&str>) -> Result<Option<String>> {
     // TODO: Check if multiple >
 
     if let Some(idx) = args.iter().position(|arg| *arg == ">") {
-        let path = args.get(idx + 1).map(|s| s.to_string());
-        args.drain(idx..);
-        return path;
+        if let Some(path) = args.get(idx + 1).map(|s| s.to_string()) {
+            args.drain(idx..);
+            return Ok(Some(path));
+        } else {
+            bail!("")
+        }
     }
 
-    None
+    Ok(None)
+}
+
+fn exec_child(args: &[&str], redirect_path: Option<&str>, process_path: &str) -> Result<()> {
+    let c_args: Vec<CString> = args
+        .iter()
+        .map(|arg| CString::new(*arg).expect("can't make cstring"))
+        .collect();
+
+    if let Some(redirect_path) = redirect_path {
+        let fd = open(
+            redirect_path,
+            OFlag::O_CREAT | OFlag::O_WRONLY,
+            Mode::S_IRUSR | Mode::S_IWUSR,
+        )?;
+
+        dup2_stdout(&fd)?;
+        dup2_stderr(&fd)?;
+    }
+
+    execv(&CString::new(process_path)?, &c_args)?;
+
+    Ok(())
+}
+
+fn run_parallel_commands(path: &mut Vec<String>, commands: Vec<&[&str]>) -> Result<()> {
+    let mut child_pids = vec![];
+    for command_args in commands {
+        let mut command_args = command_args.to_vec();
+        match command_args[0] {
+            "exit" => {
+                handle_exit();
+                Ok(())
+            }
+            "cd" => handle_cd(&command_args),
+            "path" => handle_path(path, &command_args),
+            _ => {
+                let redirect_path = get_redirect_path(&mut command_args)?;
+                process_command(path, &command_args, redirect_path.as_deref(), |child| {
+                    child_pids.push(child);
+                    Ok(())
+                })
+            }
+        }?;
+    }
+
+    for child in child_pids {
+        waitpid(child, None)?;
+    }
+
+    Ok(())
 }
