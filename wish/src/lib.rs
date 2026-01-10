@@ -6,6 +6,7 @@ use nix::{
 };
 use std::{
     ffi::CString,
+    fs::{self},
     io::{self, Write},
     process::exit,
 };
@@ -13,34 +14,12 @@ use std::{
 const PS1: &str = "wish> ";
 pub const GLOBAL_ERR_MSG: &str = "An error has occurred";
 
-pub fn run() -> Result<()> {
+pub fn run(command_file: Option<&String>) -> Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut path: Vec<String> = vec!["/bin".into()];
 
-    loop {
-        // read
-        let mut lock = stdout.lock();
-        let mut command_line = String::new();
-
-        write!(lock, "{PS1}").expect("can't write to stdout");
-        lock.flush().expect("can't flush to stdout");
-
-        let read_count = stdin
-            .read_line(&mut command_line)
-            .expect("can't read from stdin");
-
-        if read_count == 0 {
-            handle_exit();
-        }
-
-        // eval
-        let mut args = parse_args(command_line.trim());
-
-        if args.is_empty() {
-            continue;
-        }
-
+    let mut exec = |mut args: Vec<&str>| {
         let commands: Vec<&[&str]> = args.split(|arg| *arg == "&").collect();
 
         if commands.len() > 1 {
@@ -65,6 +44,51 @@ pub fn run() -> Result<()> {
             }
         }
         .unwrap_or_else(|_| eprintln!("{GLOBAL_ERR_MSG}"))
+    };
+
+    match command_file {
+        Some(path) => {
+            // TODO: more nix
+
+            for line in fs::read_to_string(path)?.lines() {
+                let args = parse_args(line.trim());
+
+                if args.is_empty() {
+                    continue;
+                }
+
+                exec(args);
+            }
+
+            Ok(())
+        }
+        None => {
+            loop {
+                // read
+                let mut lock = stdout.lock();
+                let mut command_line = String::new();
+
+                write!(lock, "{PS1}").expect("can't write to stdout");
+                lock.flush().expect("can't flush to stdout");
+
+                let read_count = stdin
+                    .read_line(&mut command_line)
+                    .expect("can't read from stdin");
+
+                if read_count == 0 {
+                    handle_exit();
+                }
+
+                // eval
+                let args = parse_args(command_line.trim());
+
+                if args.is_empty() {
+                    continue;
+                }
+
+                exec(args);
+            }
+        }
     }
 }
 
