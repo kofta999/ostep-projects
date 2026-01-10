@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use nix::{
     fcntl::{OFlag, open},
     sys::{stat::Mode, wait::waitpid},
@@ -20,15 +20,25 @@ pub fn run(command_file: Option<&String>) -> Result<()> {
     let mut path: Vec<String> = vec!["/bin".into()];
 
     let mut exec = |mut args: Vec<&str>| {
-        let commands: Vec<&[&str]> = args.split(|arg| *arg == "&").collect();
+        let commands: Vec<&[&str]> = args
+            .split(|arg| *arg == "&")
+            .filter(|c| !c.is_empty())
+            .collect();
 
         if commands.len() > 1 {
             run_parallel_commands(&mut path, commands)
         } else {
+            if commands.is_empty() {
+                return;
+            }
+
             match args[0] {
                 "exit" => {
-                    handle_exit();
-                    Ok(())
+                    if args.len() == 1 {
+                        handle_exit();
+                    }
+
+                    Err(anyhow!(""))
                 }
                 "cd" => handle_cd(&args),
                 "path" => handle_path(&mut path, &args),
@@ -39,7 +49,7 @@ pub fn run(command_file: Option<&String>) -> Result<()> {
                             Ok(())
                         })
                     }
-                    Err(_) => Ok(()),
+                    Err(_) => Err(anyhow!("")),
                 },
             }
         }
@@ -52,10 +62,6 @@ pub fn run(command_file: Option<&String>) -> Result<()> {
 
             for line in fs::read_to_string(path)?.lines() {
                 let args = parse_args(line.trim());
-
-                if args.is_empty() {
-                    continue;
-                }
 
                 exec(args);
             }
@@ -115,7 +121,10 @@ fn process_command<F: FnMut(Pid) -> Result<()>>(
                     let _ = exec_child(args, redirect_path, &full_path);
                     exit(1);
                 }
-                Err(_) => bail!(""),
+                Err(e) => {
+                    dbg!(e);
+                    bail!("")
+                }
             }
         };
     }
@@ -143,15 +152,34 @@ fn handle_path(path: &mut Vec<String>, args: &[&str]) -> Result<()> {
 }
 
 fn parse_args(command: &str) -> Vec<&str> {
-    command.split_whitespace().collect()
+    command
+        .split_whitespace()
+        .flat_map(|word| word.split_inclusive(&['>', '&']))
+        .flat_map(|part| {
+            if part.len() > 1 {
+                if let Some(part) = part.strip_suffix('>') {
+                    return vec![&part, ">"];
+                } else if let Some(part) = part.strip_suffix('&') {
+                    return vec![&part, "&"];
+                }
+            }
+            vec![part]
+        })
+        .collect()
 }
 
 fn get_redirect_path(args: &mut Vec<&str>) -> Result<Option<String>> {
     // TODO: Check if multiple >
 
     if let Some(idx) = args.iter().position(|arg| *arg == ">") {
+        if idx == 0 {
+            bail!("")
+        }
+
         if let Some(path) = args.get(idx + 1).map(|s| s.to_string()) {
-            args.drain(idx..);
+            if args.drain(idx..).len() > 2 {
+                bail!("")
+            };
             return Ok(Some(path));
         } else {
             bail!("")
@@ -189,8 +217,11 @@ fn run_parallel_commands(path: &mut Vec<String>, commands: Vec<&[&str]>) -> Resu
         let mut command_args = command_args.to_vec();
         match command_args[0] {
             "exit" => {
-                handle_exit();
-                Ok(())
+                if command_args.len() == 1 {
+                    handle_exit()
+                }
+
+                bail!("")
             }
             "cd" => handle_cd(&command_args),
             "path" => handle_path(path, &command_args),
