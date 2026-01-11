@@ -1,12 +1,11 @@
 mod shell_command;
 mod shell_state;
-use anyhow::{Context, Result};
+use anyhow::{Ok, Result};
 use shell_command::ShellCommand;
 use shell_state::ShellState;
 use std::{
     fs::{self},
     io::{self, Write},
-    process::exit,
 };
 
 const PS1: &str = "wish> ";
@@ -17,15 +16,8 @@ pub fn run(command_file: Option<&String>) -> Result<()> {
     let stdout = io::stdout();
     let mut shell_state = ShellState::new(vec!["/bin".into()]);
 
-    let mut exec = |args: Vec<String>| -> Result<()> {
-        let mut commands: Vec<ShellCommand> = args
-            .split(|arg| *arg == "&")
-            .filter(|c| !c.is_empty())
-            .map(|s| {
-                ShellCommand::try_from(s.iter().map(|x| x.to_string()).collect::<Vec<String>>())
-            })
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .context("Failed to parse command line")?;
+    let mut exec_command_line = |command_line: &str| -> Result<()> {
+        let mut commands = parse_command_line(command_line.trim())?;
 
         match commands.len() {
             0 => Ok(()),
@@ -40,19 +32,13 @@ pub fn run(command_file: Option<&String>) -> Result<()> {
         Some(path) => {
             // TODO: more nix
 
-            for line in fs::read_to_string(path)?.lines() {
-                let args = parse_args(line.trim());
-
-                if args.is_empty() {
-                    continue;
+            for command_line in fs::read_to_string(path)?.lines() {
+                if let Err(e) = exec_command_line(command_line) {
+                    eprintln!("{GLOBAL_ERR_MSG}");
+                    #[cfg(debug_assertions)]
+                    eprintln!("Detailed error: {:?}", e);
                 }
-
-                if exec(args).is_err() {
-                    eprintln!("{GLOBAL_ERR_MSG}")
-                };
             }
-
-            Ok(())
         }
         None => {
             loop {
@@ -68,38 +54,27 @@ pub fn run(command_file: Option<&String>) -> Result<()> {
                     .expect("can't read from stdin");
 
                 if read_count == 0 {
-                    exit(0);
+                    break;
                 }
 
                 // eval
-                let args = parse_args(command_line.trim());
-
-                if args.is_empty() {
-                    continue;
+                if let Err(e) = exec_command_line(&command_line) {
+                    eprintln!("{GLOBAL_ERR_MSG}");
+                    #[cfg(debug_assertions)]
+                    eprintln!("Detailed error: {:?}", e);
                 }
-
-                if exec(args).is_err() {
-                    eprintln!("{GLOBAL_ERR_MSG}")
-                };
             }
         }
     }
+
+    Ok(())
 }
 
-fn parse_args(command: &str) -> Vec<String> {
-    command
-        .split_whitespace()
-        .flat_map(|word| word.split_inclusive(&['>', '&']))
-        .flat_map(|part| {
-            if part.len() > 1 {
-                if let Some(part) = part.strip_suffix('>') {
-                    return vec![&part, ">"];
-                } else if let Some(part) = part.strip_suffix('&') {
-                    return vec![&part, "&"];
-                }
-            }
-            vec![part]
-        })
-        .map(|s| s.to_string())
+fn parse_command_line(input: &str) -> Result<Vec<ShellCommand>> {
+    input
+        .split('&')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|cmd_chunk| ShellCommand::try_from(cmd_chunk.to_string()))
         .collect()
 }
