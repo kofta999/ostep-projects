@@ -75,6 +75,6 @@ fn parse_command_line(input: &str) -> Result<Vec<ShellCommand>> {
         .split('&')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|cmd_chunk| ShellCommand::try_from(cmd_chunk.to_string()))
+        .map(ShellCommand::try_from)
         .collect()
 }

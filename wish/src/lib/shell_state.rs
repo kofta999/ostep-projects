@@ -35,12 +35,12 @@ impl ShellState {
 
     fn process_command<F: FnMut(Pid) -> Result<()>>(
         &self,
-        args: &[String],
+        args: &[&str],
         redirect_path: Option<PathBuf>,
         mut parent_handle: F,
     ) -> Result<()> {
         for p in &self.path {
-            let full_path = p.join(&args[0]);
+            let full_path = p.join(args[0]);
 
             if access(
                 &full_path,
@@ -56,7 +56,7 @@ impl ShellState {
                     Ok(ForkResult::Child) => {
                         let c_args: Vec<CString> = args
                             .iter()
-                            .map(|arg| CString::new(arg.clone()).expect("can't make cstring"))
+                            .map(|arg| CString::new(*arg).expect("can't make cstring"))
                             .collect();
 
                         if let Some(redirect_path) = redirect_path {

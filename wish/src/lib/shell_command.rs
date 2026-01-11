@@ -1,26 +1,24 @@
 use anyhow::{Ok, Result, anyhow, bail};
 use std::path::PathBuf;
 
-type Tokens = String;
-
 #[derive(Debug)]
-pub enum ShellCommand {
+pub enum ShellCommand<'a> {
     BuiltinExit,
     BuiltinCd(PathBuf),
     BuiltinPath(Vec<PathBuf>),
     External {
-        args: Vec<String>,
+        args: Vec<&'a str>,
         redirect: Option<PathBuf>,
     },
 }
 
-impl TryFrom<String> for ShellCommand {
+impl<'a> TryFrom<&'a str> for ShellCommand<'a> {
     type Error = anyhow::Error;
 
-    fn try_from(input: String) -> std::result::Result<Self, Self::Error> {
-        let args = Self::parse_line(input);
+    fn try_from(input: &'a str) -> std::result::Result<Self, Self::Error> {
+        let args = Self::tokenize(input);
 
-        match args.first().expect("args is empty").as_str() {
+        match *args.first().expect("args is empty") {
             "exit" => {
                 if args.len() != 1 {
                     bail!("Extra argument in exit command")
@@ -42,20 +40,40 @@ impl TryFrom<String> for ShellCommand {
     }
 }
 
-impl ShellCommand {
-    fn parse_line(line: String) -> Vec<Tokens> {
-        line.replace(">", " > ")
-            .split_whitespace()
-            .map(|s| s.to_string())
+impl<'a> ShellCommand<'a> {
+    fn tokenize(line: &'a str) -> Vec<&'a str> {
+        line.split_whitespace()
+            .flat_map(|word| {
+                // We split by '>' but keep the '>' as its own slice
+                if word.contains('>') {
+                    let mut tokens = Vec::new();
+                    let mut start = 0;
+                    for (i, c) in word.char_indices() {
+                        if c == '>' {
+                            if i > start {
+                                tokens.push(&word[start..i]); // text before >
+                            }
+                            tokens.push(">"); // the > itself
+                            start = i + 1;
+                        }
+                    }
+                    if start < word.len() {
+                        tokens.push(&word[start..]); // text after last >
+                    }
+                    tokens
+                } else {
+                    vec![word]
+                }
+            })
             .collect()
     }
 
-    fn parse_cd(args: &[String]) -> Option<PathBuf> {
+    fn parse_cd(args: &[&str]) -> Option<PathBuf> {
         args.get(1).map(PathBuf::from)
     }
 
-    fn get_redirect(mut args: Vec<String>) -> Result<(Option<PathBuf>, Vec<String>)> {
-        if let Some(idx) = args.iter().position(|arg| arg == ">") {
+    fn get_redirect(mut args: Vec<&'a str>) -> Result<(Option<PathBuf>, Vec<&'a str>)> {
+        if let Some(idx) = args.iter().position(|arg| *arg == ">") {
             if idx == 0 || idx != args.len() - 2 {
                 bail!("Redirection operator position invalid")
             }
