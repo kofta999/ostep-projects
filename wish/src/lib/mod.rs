@@ -1,6 +1,6 @@
 mod shell_command;
 mod shell_state;
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use shell_command::ShellCommand;
 use shell_state::ShellState;
 use std::{

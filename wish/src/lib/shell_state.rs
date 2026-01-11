@@ -24,7 +24,7 @@ impl ShellState {
             ShellCommand::BuiltinExit => exit(0),
             ShellCommand::BuiltinCd(path_buf) => Ok(chdir(&path_buf)?),
             ShellCommand::BuiltinPath(items) => {
-                self.path = items.to_vec();
+                self.path = items;
                 Ok(())
             }
             ShellCommand::External { args, redirect } => {
