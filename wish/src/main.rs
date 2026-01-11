@@ -11,7 +11,7 @@ fn main() {
         exit(1);
     }
 
-    if let Err(e) = lib::run(args.get(1)) {
+    if lib::run(args.get(1)).is_err() {
         eprintln!("{GLOBAL_ERR_MSG}");
         exit(1);
     }
