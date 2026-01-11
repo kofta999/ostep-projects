@@ -1,6 +1,6 @@
 mod shell_command;
 mod shell_state;
-use anyhow::{Result, bail};
+use anyhow::{Context, Result};
 use shell_command::ShellCommand;
 use shell_state::ShellState;
 use std::{
@@ -21,8 +21,11 @@ pub fn run(command_file: Option<&String>) -> Result<()> {
         let mut commands: Vec<ShellCommand> = args
             .split(|arg| *arg == "&")
             .filter(|c| !c.is_empty())
-            .map(|s| ShellCommand::from_line(s.iter().map(|x| x.to_string()).collect()))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|s| {
+                ShellCommand::try_from(s.iter().map(|x| x.to_string()).collect::<Vec<String>>())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .context("Failed to parse command line")?;
 
         match commands.len() {
             0 => Ok(()),

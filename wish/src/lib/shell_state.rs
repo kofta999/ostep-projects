@@ -5,14 +5,14 @@ use nix::{
     sys::{stat::Mode, wait::waitpid},
     unistd::{AccessFlags, ForkResult, Pid, access, chdir, dup2_stderr, dup2_stdout, execv, fork},
 };
-use std::{ffi::CString, process::exit};
+use std::{ffi::CString, path::PathBuf, process::exit};
 
 pub struct ShellState {
-    path: Vec<String>,
+    path: Vec<PathBuf>,
 }
 
 impl ShellState {
-    pub fn new(path: Vec<String>) -> Self {
+    pub fn new(path: Vec<PathBuf>) -> Self {
         Self { path }
     }
 
@@ -36,13 +36,13 @@ impl ShellState {
     fn process_command<F: FnMut(Pid) -> Result<()>>(
         &self,
         args: &[String],
-        redirect_path: Option<String>,
+        redirect_path: Option<PathBuf>,
         mut parent_handle: F,
     ) -> Result<()> {
         for p in &self.path {
-            let full_path = format!("{p}/{}", args[0]);
+            let full_path = p.join(&args[0]);
 
-            if access(full_path.as_str(), AccessFlags::F_OK).is_ok() {
+            if access(&full_path, AccessFlags::F_OK).is_ok() {
                 match unsafe { fork() } {
                     Ok(ForkResult::Parent { child }) => {
                         parent_handle(child)?;
@@ -56,7 +56,7 @@ impl ShellState {
 
                         if let Some(redirect_path) = redirect_path {
                             let fd = open(
-                                redirect_path.as_str(),
+                                &redirect_path,
                                 OFlag::O_CREAT | OFlag::O_WRONLY,
                                 Mode::S_IRUSR | Mode::S_IWUSR,
                             )?;
@@ -65,7 +65,14 @@ impl ShellState {
                             dup2_stderr(&fd)?;
                         }
 
-                        execv(&CString::new(full_path)?, &c_args)?;
+                        execv(
+                            &CString::new(
+                                full_path
+                                    .to_str()
+                                    .expect("Couldn't convert PathBuf to &str"),
+                            )?,
+                            &c_args,
+                        )?;
                         exit(1);
                     }
                     Err(e) => {
