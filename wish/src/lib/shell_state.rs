@@ -56,7 +56,7 @@ impl ShellState {
                     Ok(ForkResult::Child) => {
                         let c_args: Vec<CString> = args
                             .iter()
-                            .map(|arg| CString::new(*arg).expect("can't make cstring"))
+                            .map(|arg| CString::new(*arg).expect("Null byte found"))
                             .collect();
 
                         if let Some(redirect_path) = redirect_path {
