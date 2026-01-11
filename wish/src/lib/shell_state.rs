@@ -42,7 +42,12 @@ impl ShellState {
         for p in &self.path {
             let full_path = p.join(&args[0]);
 
-            if access(&full_path, AccessFlags::F_OK).is_ok() {
+            if access(
+                &full_path,
+                AccessFlags::F_OK | AccessFlags::R_OK | AccessFlags::X_OK,
+            )
+            .is_ok()
+            {
                 match unsafe { fork() } {
                     Ok(ForkResult::Parent { child }) => {
                         parent_handle(child)?;
@@ -75,15 +80,14 @@ impl ShellState {
                         )?;
                         exit(1);
                     }
-                    Err(e) => {
-                        dbg!(e);
-                        bail!("")
+                    Err(_) => {
+                        bail!("Couldn't execute child process")
                     }
                 }
             };
         }
 
-        bail!("")
+        bail!("Couldn't access executable file");
     }
 
     pub fn execute_single(&mut self, cmd: ShellCommand) -> Result<()> {
